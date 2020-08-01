@@ -641,8 +641,8 @@ class PKPIntercityGTFS:
             "0", escape_csv(root_attr), "1", "0", "0", "0", escape_csv(root_attr_url)
         ]) + "\n")
 
-        file.write('1,"Stop positions: © OpenStreetMap contributors (under ODbL liceense, "'
-                   f'"data retrieved {osm_tstamp})",1,0,0,'
+        file.write('1,"Stop positions: © OpenStreetMap contributors (under ODbL license, "'
+                   f'data retrieved {osm_tstamp})",1,0,0,'
                    '1,"https://www.openstreetmap.org/copyright/"\n')
 
         file.write(f'2,"PKP Intercity S.A. (data retrieved {pkpic_tstamp})",0,1,0,'
@@ -753,7 +753,7 @@ if __name__ == "__main__":
         "-pu", "--publisher-url",
         required=False,
         metavar="URL",
-        help="value of feep_publisher_url (--publisher-name is also required to create feed_info)",
+        help="value of feed_publisher_url (--publisher-name is also required to create feed_info)",
         default="",
     )
 
