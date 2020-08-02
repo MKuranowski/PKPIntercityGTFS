@@ -627,25 +627,16 @@ class PKPIntercityGTFS:
         file.write('0,PKP Intercity,"https://intercity.pl/",Europe/Warsaw,pl,+48703200200')
         file.close()
 
-        # Publisher attribution
-        root_attr = f"{pub_name} (using PKPIntercityGTFS script)" if (pub_name and pub_url) \
-                    else "PKPIntercityGTFS script"
-        root_attr_url = pub_url or "https://github.com/MKuranowski/PKPIntercityGTFS/"
-
         # Attributions
         file = open("gtfs/attributions.txt", mode="w", encoding="utf-8", newline="\r\n")
-        file.write("attribution_id,organization_name,is_producer,is_operator,is_authority,"
+        file.write("organization_name,is_producer,is_operator,is_authority,"
                    "is_data_source,attribution_url\n")
 
-        file.write(",".join([
-            "0", escape_csv(root_attr), "1", "0", "0", "0", escape_csv(root_attr_url)
-        ]) + "\n")
-
-        file.write('1,"Stop positions: © OpenStreetMap contributors (under ODbL license, "'
-                   f'data retrieved {osm_tstamp})",1,0,0,'
+        file.write('"Stop positions provided by: © OpenStreetMap contributors '
+                   f'(under ODbL license, retrieved {osm_tstamp})",0,0,1,'
                    '1,"https://www.openstreetmap.org/copyright/"\n')
 
-        file.write(f'2,"PKP Intercity S.A. (data retrieved {pkpic_tstamp})",0,1,0,'
+        file.write(f'"Schedules provided by: PKP Intercity S.A. (retrieved {pkpic_tstamp})",0,1,0,'
                    '1,"https://intercity.pl/"\n')
 
         file.close()
