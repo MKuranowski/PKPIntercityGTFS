@@ -1,17 +1,19 @@
-from tempfile import TemporaryFile
+import argparse
+import csv
+import ftplib
+import io
+import json
+import os
+import shutil
+import zipfile
+from copy import copy
 from datetime import datetime
 from netrc import netrc
-from copy import copy
-import argparse
+from tempfile import TemporaryFile
+from typing import Dict, Iterable, List, Optional, Set, Tuple
+
 import overpass
-import zipfile
-import ftplib
-import shutil
 import pytz
-import json
-import csv
-import io
-import os
 
 __title__ = "PKPIntercityGTFS"
 __license__ = "MIT"
@@ -19,17 +21,28 @@ __author__ = "Mikołaj Kuranowski"
 __email__ = "".join(chr(i) for i in [109, 105, 107, 111, 108, 97, 106, 64, 109, 107,
                                      117, 114, 97, 110, 46, 112, 108])
 
+# Types
+
+Color = Tuple[str, str]  # background, text
+StopData = Tuple[str, str]  # id, name
+Position = Tuple[float, float]  # lat, lon
+Transfer = Tuple[str, str, str]  # stop, from_train, to_train
+CsvRow = Dict[str, str]
+
+
+# Static Data
+
 FTP_ADDR = "ftps.intercity.pl"
 
 ARCH_FTP_PATH = "rozklad/KPD_Rozklad.zip"
 ARCH_CSV_FILE = "KPD_Rozklad.csv"
 
-ADD_STOPS = {
+ADD_STOPS: Dict[str, Position] = {
     "Warszawa Zachodnia (Peron 8)": (52.221609, 20.961388),
     "Zduńska Wola Karsznice": (51.58046, 19.00512),
 }
 
-FIX_STOPS = {
+FIX_STOPS: Dict[str, str] = {
     "BOHUMIN": "BOGUMIN",
     "RABKA ZDRÓJ": "RABKA-ZDRÓJ",
     "MOSTISKA 2": "MOŚCISKA 2",
@@ -56,9 +69,9 @@ FIX_STOPS = {
     "WIELEŃ PÓŁNOCNY": "WIELEŃ",
 }
 
-DEFAULT_COLOR = ("DE4E4E", "FFFFFF")
+DEFAULT_COLOR: Color = ("DE4E4E", "FFFFFF")
 
-ROUTE_COLORS = {
+ROUTE_COLORS: Dict[str, Color] = {
     "TLK": ("8505A3", "FFFFFF"),
     "IC": ("F25E18", "FFFFFF"),
     "IC EIC": ("898989", "FFFFFF"),
@@ -72,13 +85,13 @@ ROUTE_COLORS = {
 class FTP_TLS_Patched(ftplib.FTP_TLS):
     """A patched FTP client"""
 
-    def makepasv(self):
+    def makepasv(self) -> Tuple[str, int]:
         """Parse PASV response, but ignore provided IP.
         PKP IC's FTP sends incorrect addresses."""
         _, port = super().makepasv()
         return self.host, port
 
-    def mod_time(self, filename):
+    def mod_time(self, filename: str) -> datetime:
         """Get modification time of file on the server.
         Returns an aware datetime object."""
         resp = self.voidcmd("MDTM " + filename)
@@ -96,7 +109,7 @@ class FTP_TLS_Patched(ftplib.FTP_TLS):
         return date
 
 
-def row_dep_only(row, set_bus=None):
+def row_dep_only(row: CsvRow, set_bus: Optional[str] = None) -> CsvRow:
     """Return copy of this row, but only with departure data"""
     row = copy(row)
     if set_bus is not None:
@@ -107,7 +120,7 @@ def row_dep_only(row, set_bus=None):
     return row
 
 
-def row_arr_only(row, set_bus=None):
+def row_arr_only(row: CsvRow, set_bus: Optional[str] = None) -> CsvRow:
     """Return copy of this row, but only with arrival data"""
     row = copy(row)
     if set_bus is not None:
@@ -118,10 +131,10 @@ def row_arr_only(row, set_bus=None):
     return row
 
 
-def train_loader(file_name):
+def train_loader(file_name: str) -> Iterable[List[CsvRow]]:
     """Generate trains from the CSV file."""
-    previous_train_id = None
-    previous_train_data = []
+    previous_train_id: Tuple[str, str] = ("", "")
+    previous_train_data: List[CsvRow] = []
 
     with open(file_name, mode="r", encoding="utf8", newline="") as f:
         reader = csv.DictReader(f)
@@ -144,52 +157,53 @@ def train_loader(file_name):
             yield previous_train_data
 
 
-def train_legs(rows):
+def train_legs(rows: List[CsvRow]) -> List[List[CsvRow]]:
     """Generate all legs of a train from its routes."""
-    previous_bus_value = None
-    leg_so_far = []
-
-    # first BUS=1 after a train → train arrival, bus departure
-    # first BUS=0 after a bus → bus arrival, train departure
+    all_legs: List[List[CsvRow]] = []
+    leg_so_far: List[CsvRow] = []
+    previous_bus: bool = rows[0]["BUS"] == "1"
 
     for row in rows:
-        current_bus_value = int(row["BUS"])
+        current_bus: bool = row["BUS"] == "1"
 
-        if current_bus_value != previous_bus_value:
-
+        # Bus value flips - arrival same as `previous_bus`, departure as `current_bus`
+        # Also, flips on the last stop are ignored as they make no sense.
+        if previous_bus != current_bus:
             if len(leg_so_far) > 1:
-                leg_so_far.append(row_arr_only(row, set_bus=(current_bus_value ^ 1)))
-                yield leg_so_far
+                leg_so_far.append(row_arr_only(row, set_bus="1" if previous_bus else "0"))
+                all_legs.append(leg_so_far)
 
-            previous_bus_value = copy(current_bus_value)
             leg_so_far = [row_dep_only(row)]
+            previous_bus = current_bus
 
         else:
             leg_so_far.append(row)
 
     if len(leg_so_far) > 1:
-        yield leg_so_far
+        all_legs.append(leg_so_far)
+
+    return all_legs
 
 
-def time_to_list(text):
+def time_to_list(text: str) -> List[int]:
     """Convert 'HH:MM:SS' string into a [h, m, s] list"""
     h, m, s = map(int, text.split(":"))
     return [h, m, s]
 
 
-def time_to_str(h, m, s):
+def time_to_str(h: int, m: int, s: int) -> str:
     """Create a 'HH:MM:SS' string from h, m, s ints."""
     return f"{h:0>2}:{m:0>2}:{s:0>2}"
 
 
-def file_mtime(file_name):
+def file_mtime(file_name: str) -> str:
     """Get file modification time."""
     s = os.stat(file_name).st_mtime
     d = datetime.fromtimestamp(s)
     return d.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def resolve_ftp_login():
+def resolve_ftp_login() -> Tuple[str, str]:
     # If username and password is provided in arguments, just return them
     if "PKPIC_FTPUSER" in os.environ and "PKPIC_FTPPASS" in os.environ:
         return os.environ["PKPIC_FTPUSER"], os.environ["PKPIC_FTPPASS"]
@@ -231,25 +245,24 @@ def resolve_ftp_login():
                          "or ~/.netrc")
 
 
-def escape_csv(value):
+def escape_csv(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
 class PKPIntercityGTFS:
     def __init__(self):
-        self.version = None
-        self.data_fetch = None
+        self.version: str = ""
 
-        self.stops = {}
-        self.stops_used = set()
-        self.stops_invalid = set()
-        self.stops_duplicate = set()
+        self.stops: Dict[str, Position] = {}
+        self.stops_used: Set[StopData] = set()
+        self.stops_invalid: Set[StopData] = set()
+        self.stops_duplicate: Set[str] = set()
 
-        self.routes = set()
-        self.services = set()
-        self.transfers = []
+        self.routes: Set[str] = set()
+        self.services: Set[str] = set()
+        self.transfers: List[Transfer] = []
 
-    def version_check(self):
+    def version_check(self) -> bool:
         """Check if data on FTP is newer then previously-parsed data."""
         if not os.path.exists("version.txt"):
             current_version = ""
@@ -264,13 +277,12 @@ class PKPIntercityGTFS:
 
             return True
 
-        else:
-            return False
+        return False
 
-    def get_file(self, ftp_user, ftp_pass):
+    def get_file(self, ftp_user: str, ftp_pass: str) -> None:
         """Connect to PKP IC FTP server,
         download archive with schedules,
-        and extract the CSV file ftom it."""
+        and extract the CSV file from it to rozklad.csv."""
         # TemporaryFile for the archive
         with TemporaryFile(mode="w+b", suffix=".zip") as temp_zip:
 
@@ -310,8 +322,9 @@ class PKPIntercityGTFS:
                     for line in in_csv:
                         out_csv.writerow(line)
 
-    def get_stops_overpass(self):
-        """Get stop positions from OpenStreetMap"""
+    def get_stops_overpass(self) -> None:
+        """Get stop positions from OpenStreetMap.
+        Save to self.stops and stops.json."""
         api = overpass.API(timeout=600)
         data: dict = api.get(
             "[out:json][timeout:600][bbox:46.4,12,55,30];"
@@ -366,12 +379,12 @@ class PKPIntercityGTFS:
         with open("stops.json", mode="w", encoding="utf-8") as f:
             json.dump(self.stops, f, ensure_ascii=False)
 
-    def get_stops_local(self):
+    def get_stops_local(self) -> None:
         """Get stop positions from local file, stops.json"""
         with open("stops.json", mode="r", encoding="utf-8") as f:
             self.stops = json.load(f)
 
-    def save_trips(self):
+    def save_trips(self) -> None:
         """Parse data from rozklad.csv and save trips and stop_times."""
         file_trips = open("gtfs/trips.txt", mode="w", encoding="utf8", newline="")
         wrtr_trips = csv.writer(file_trips)
@@ -547,7 +560,7 @@ class PKPIntercityGTFS:
         file_trips.close()
         file_times.close()
 
-    def save_stops(self):
+    def save_stops(self) -> None:
         file = open("gtfs/stops.txt", mode="w", encoding="utf-8", newline="")
         writer = csv.writer(file)
         writer.writerow(["stop_id", "stop_name", "stop_lat", "stop_lon"])
@@ -567,7 +580,7 @@ class PKPIntercityGTFS:
 
         file.close()
 
-    def save_routes(self):
+    def save_routes(self) -> None:
         file = open("gtfs/routes.txt", mode="w", encoding="utf-8", newline="")
         writer = csv.writer(file)
         writer.writerow([
@@ -585,7 +598,7 @@ class PKPIntercityGTFS:
 
         file.close()
 
-    def save_transfers(self):
+    def save_transfers(self) -> None:
         file = open("gtfs/transfers.txt", mode="w", encoding="utf-8", newline="")
         writer = csv.writer(file)
         writer.writerow([
@@ -600,7 +613,7 @@ class PKPIntercityGTFS:
 
         file.close()
 
-    def save_dates(self):
+    def save_dates(self) -> None:
         file = open("gtfs/calendar_dates.txt", mode="w", encoding="utf-8", newline="")
         writer = csv.writer(file)
         writer.writerow([
@@ -614,7 +627,7 @@ class PKPIntercityGTFS:
 
         file.close()
 
-    def save_static(self, pub_name, pub_url):
+    def save_static(self, pub_name: str, pub_url: str) -> None:
         # make sure current version is defined
         assert isinstance(self.version, str)
 
@@ -650,7 +663,7 @@ class PKPIntercityGTFS:
             ]) + "\n")
             file.close()
 
-    def compress(self, target="pkpic.zip"):
+    def compress(self, target: str = "pkpic.zip") -> None:
         "Compress all created files to pkpic.zip"
         with zipfile.ZipFile(target, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
             for file in os.listdir("gtfs"):
@@ -658,8 +671,8 @@ class PKPIntercityGTFS:
                     archive.write(os.path.join("gtfs", file), arcname=file)
 
     @classmethod
-    def create(cls, ftp_user, ftp_pass, ignore_version="", refresh_osm=False,
-               pub_name="", pub_url=""):
+    def create(cls, ftp_user: str, ftp_pass: str, ignore_version: str = "",
+               refresh_osm: bool = False, pub_name: str = "", pub_url: str = ""):
         self = cls()
 
         print("Downloading file")
