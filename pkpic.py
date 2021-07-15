@@ -25,7 +25,6 @@ __email__ = "".join(chr(i) for i in [109, 105, 107, 111, 108, 97, 106, 64, 109, 
 # Types
 
 Color = Tuple[str, str]  # background, text
-Transfer = Tuple[str, str, str]  # stop, from_train, to_train
 CsvRow = Dict[str, str]
 
 
@@ -133,6 +132,33 @@ def train_loader(file_name: str) -> Iterable[List[CsvRow]]:
             yield previous_train_data
 
 
+def train_fixup(rows: List[CsvRow]) -> List[CsvRow]:
+    """Fixes a train - changes 'Przyjazd' and 'Odjazd' times to GTFS-compliant strings,
+    removes non-passenger stations"""
+    # Remove non-passenger stops and sort those stops
+    rows = sorted([i for i in rows if i["StacjaHandlowa"] == "1"],
+                  key=lambda i: int(i["Lp"]))
+
+    # Fix times
+    previous_dep = [0, 0, 0]
+
+    for row in rows:
+        arr = time_to_list(row["Przyjazd"])
+        dep = time_to_list(row["Odjazd"])
+
+        while arr < previous_dep:
+            arr[0] += 24
+
+        while dep < arr:
+            dep[0] += 24
+
+        previous_dep = dep
+        row["Przyjazd"] = time_to_str(*arr)
+        row["Odjazd"] = time_to_str(*dep)
+
+    return rows
+
+
 def train_legs(rows: List[CsvRow]) -> List[List[CsvRow]]:
     """Generate all legs of a train from its routes."""
     all_legs: List[List[CsvRow]] = []
@@ -144,7 +170,7 @@ def train_legs(rows: List[CsvRow]) -> List[List[CsvRow]]:
 
         # Bus value flips - arrival same as `previous_bus`, departure as `current_bus`
         # Also, flips on the last stop are ignored as they make no sense.
-        if previous_bus != current_bus:
+        if previous_bus != current_bus and row is not rows[-1]:
             if len(leg_so_far) > 1:
                 leg_so_far.append(row_arr_only(row, set_bus="1" if previous_bus else "0"))
                 all_legs.append(leg_so_far)
@@ -236,7 +262,6 @@ class PKPIntercityGTFS:
 
         self.routes: Set[str] = set()
         self.services: Set[str] = set()
-        self.transfers: List[Transfer] = []
 
     def version_check(self) -> bool:
         """Check if data on FTP is newer then previously-parsed data."""
@@ -317,6 +342,68 @@ class PKPIntercityGTFS:
                 lat=elem["lat"],
                 lon=elem["lon"])
 
+    def save_trip_leg(self, wrtr_trips: "csv._writer", wrtr_times: "csv._writer",
+                      gtfs_trip: List[str], leg: List[CsvRow]) -> None:
+        """Writes a single leg to trips.txt and stop_times.txt.
+        Checks and modifies the route_id in the case of a bus legs."""
+        if leg[0]["BUS"] == "1":
+            gtfs_trip[0] = "ZKA " + gtfs_trip[0]
+        self.routes.add(gtfs_trip[0])
+
+        wrtr_trips.writerow(gtfs_trip)
+
+        for seq, row in enumerate(leg):
+            stop_id = row["NumerStacji"]
+            stop_name = row["NazwaStacji"]
+
+            if stop_id not in self.stops:
+                self.stops_invalid.add(StopData(stop_id, stop_name))
+                continue
+
+            # Mark stop as used
+            self.stops_used.add(stop_id)
+            self.stop_names_db[stop_id] = stop_name
+
+            # Platforms
+            platform_arr = row["PeronWjazd"]
+            platform_dep = row["PeronWyjazd"]
+
+            if platform_arr.upper() in {"BUS", "NULL"}:
+                platform_arr = ""
+
+            if platform_dep.upper() in {"BUS", "NULL"}:
+                platform_dep = ""
+
+            platform = platform_dep or platform_arr
+
+            # Dump to GTFS
+            wrtr_times.writerow([gtfs_trip[2], seq, stop_id, row["Przyjazd"], row["Odjazd"],
+                                 platform])
+
+    def save_trip_multiple_legs(self, wrtr_trips: "csv._writer", wrtr_times: "csv._writer",
+                                wrtr_transfers: "csv._writer", base_trip: List[str],
+                                legs: List[List[CsvRow]]) -> None:
+        previous_leg_id: str = ""
+
+        for suffix, leg in enumerate(legs):
+            leg_id = f"{base_trip[2]}_{suffix}"
+
+            # Update trips.txt entry
+            leg_trip = base_trip.copy()
+            leg_trip[2] = leg_id
+
+            # Write to trips.txt and transfers.txt (which handles bus legs)
+            self.save_trip_leg(wrtr_trips, wrtr_times, leg_trip, leg)
+
+            # Write to transfers.txt
+            transfer_stop = leg[0]["NumerStacji"]
+            if previous_leg_id and transfer_stop in self.stops:
+                wrtr_transfers.writerow([
+                    transfer_stop, transfer_stop, previous_leg_id, leg_id, "1",
+                ])
+
+            previous_leg_id = leg_id
+
     def save_trips(self) -> None:
         """Parse data from rozklad.csv and save trips and stop_times."""
         file_trips = open("gtfs/trips.txt", mode="w", encoding="utf8", newline="")
@@ -332,27 +419,29 @@ class PKPIntercityGTFS:
             "arrival_time", "departure_time", "platform",
         ])
 
-        for train_rows in train_loader("rozklad.csv"):
-            # Filter "stations" without passanger exchange
-            valid_rows = sorted([i for i in train_rows if i["StacjaHandlowa"] == "1"],
-                                key=lambda i: int(i["Lp"]))
+        file_transfers = open("gtfs/transfers.txt", mode="w", encoding="utf8", newline="")
+        wrtr_transfers = csv.writer(file_transfers)
+        wrtr_transfers.writerow([
+            "from_stop_id", "to_stop_id", "from_trip_id",
+            "to_trip_id", "transfer_type",
+        ])
 
-            # Ignore trains with only one valid station
-            if len(valid_rows) <= 1:
-                continue
+        for rows in train_loader("rozklad.csv"):
+            # Filter "stations" without passanger exchange
+            rows = train_fixup(rows)
 
             # Get some info about the train
-            category = train_rows[0]["KategoriaHandlowa"].replace("  ", " ")
-            number = train_rows[0]["NrPociaguHandlowy"]
-            name = train_rows[0]["NazwaPociagu"]
+            category = rows[0]["KategoriaHandlowa"].replace("  ", " ")
+            number = rows[0]["NrPociaguHandlowy"]
+            name = rows[0]["NazwaPociagu"]
 
-            service_id = train_rows[0]["DataOdjazdu"]
-            train_id = service_id + "_" + train_rows[0]["NrPociagu"].replace("/", "-")
+            service_id = rows[0]["DataOdjazdu"]
+            train_id = service_id + "_" + rows[0]["NrPociagu"].replace("/", "-")
 
             print("\033[1A\033[K" f"Parsing trips: {train_id}")
 
             # User-facing text info
-            headsign = valid_rows[-1]["NazwaStacji"]
+            headsign = rows[-1]["NazwaStacji"]
 
             if name and number in name:
                 gtfs_name = name.title().replace("Zka", "ZKA")
@@ -361,132 +450,18 @@ class PKPIntercityGTFS:
             else:
                 gtfs_name = number
 
-            multiple_legs = len({i["BUS"] for i in valid_rows}) > 1
+            # Create a base trips.txt entry
+            gtfs_trip = [category, service_id, train_id, headsign, gtfs_name]
 
-            if not multiple_legs:
-                is_bus = int(valid_rows[0]["BUS"]) == 1
-                category = f"ZKA {category}" if is_bus else category
+            # Write to GTFS
+            self.services.add(service_id)
+            legs = train_legs(rows)
 
-                if is_bus:
-                    print("\033[1A\033[K" f"BUS: {train_id}")
-
-                wrtr_trips.writerow([category, service_id, train_id, headsign, gtfs_name])
-
-                self.routes.add(category)
-                self.services.add(service_id)
-
-                previous_dep = [0, 0, 0]
-
-                for seq, row in enumerate(valid_rows):
-                    stop_id = row["NumerStacji"]
-                    stop_name = row["NazwaStacji"]
-
-                    if stop_id in self.stops:
-                        self.stops_used.add(stop_id)
-                        self.stop_names_db[stop_id] = stop_name
-
-                        # Fix time values
-                        arr = time_to_list(row["Przyjazd"])
-                        dep = time_to_list(row["Odjazd"])
-
-                        while arr < previous_dep:
-                            arr[0] += 24
-
-                        while dep < arr:
-                            dep[0] += 24
-
-                        previous_dep = copy(dep)
-
-                        arr = time_to_str(*arr)
-                        dep = time_to_str(*dep)
-
-                        # Platforms
-                        platform_arr = row["PeronWjazd"]
-                        platform_dep = row["PeronWyjazd"]
-
-                        if platform_arr.upper() in {"BUS", "NULL"}:
-                            platform_arr = ""
-
-                        if platform_dep.upper() in {"BUS", "NULL"}:
-                            platform_dep = ""
-
-                        platform = platform_dep or platform_arr
-
-                        # Dump to GTFS
-                        wrtr_times.writerow([
-                            train_id, seq, stop_id,
-                            arr, dep, platform,
-                        ])
-
-                    else:
-                        self.stops_invalid.add(StopData(stop_id, stop_name))
-
+            if len(legs) > 1:
+                self.save_trip_multiple_legs(wrtr_trips, wrtr_times, wrtr_transfers,
+                                             gtfs_trip, legs)
             else:
-                previous_dep = [0, 0, 0]
-
-                for leg_suffix, leg_rows in enumerate(train_legs(valid_rows)):
-                    leg_id = train_id + "_" + str(leg_suffix)
-
-                    leg_is_bus = int(leg_rows[0]["BUS"]) == 1
-                    leg_cat = f"ZKA {category}" if leg_is_bus else category
-
-                    wrtr_trips.writerow([leg_cat, service_id, leg_id, headsign, gtfs_name])
-
-                    self.routes.add(leg_cat)
-                    self.services.add(service_id)
-
-                    # Transfer
-                    if leg_suffix > 0:
-                        transfer_stop = leg_rows[0]["NumerStacji"]
-                        self.transfers.append((
-                            transfer_stop,
-                            train_id + "_" + str(leg_suffix - 1),
-                            leg_id,
-                        ))
-
-                    for seq, row in enumerate(leg_rows):
-                        stop_id = row["NumerStacji"]
-                        stop_name = row["NazwaStacji"]
-
-                        if stop_id in self.stops:
-                            self.stops_used.add(stop_id)
-                            self.stop_names_db[stop_id] = stop_name
-
-                            # Fix time values
-                            arr = time_to_list(row["Przyjazd"])
-                            dep = time_to_list(row["Odjazd"])
-
-                            while arr < previous_dep:
-                                arr[0] += 24
-
-                            while dep < arr:
-                                dep[0] += 24
-
-                            previous_dep = copy(dep)
-
-                            arr = time_to_str(*arr)
-                            dep = time_to_str(*dep)
-
-                            # Platforms
-                            platform_arr = row["PeronWjazd"]
-                            platform_dep = row["PeronWyjazd"]
-
-                            if platform_arr.upper() in {"BUS", "NULL"}:
-                                platform_arr = ""
-
-                            if platform_dep.upper() in {"BUS", "NULL"}:
-                                platform_dep = ""
-
-                            platform = platform_dep or platform_arr
-
-                            # Dump to GTFS
-                            wrtr_times.writerow([
-                                leg_id, seq, stop_id,
-                                arr, dep, platform,
-                            ])
-
-                        else:
-                            self.stops_invalid.add(StopData(stop_id, stop_name))
+                self.save_trip_leg(wrtr_trips, wrtr_times, gtfs_trip, legs[0])
 
         file_trips.close()
         file_times.close()
@@ -528,21 +503,6 @@ class PKPIntercityGTFS:
             writer.writerow([
                 "0", route_id, route_id, "", route_type,
                 route_color, route_text
-            ])
-
-        file.close()
-
-    def save_transfers(self) -> None:
-        file = open("gtfs/transfers.txt", mode="w", encoding="utf-8", newline="")
-        writer = csv.writer(file)
-        writer.writerow([
-            "from_stop_id", "to_stop_id", "from_trip_id",
-            "to_trip_id", "transfer_type",
-        ])
-
-        for stop_id, from_trip, to_trip in self.transfers:
-            writer.writerow([
-                stop_id, stop_id, from_trip, to_trip, "1",
             ])
 
         file.close()
@@ -638,9 +598,6 @@ class PKPIntercityGTFS:
 
         print("\033[1A\033[K" "Parsing routes")
         self.save_routes()
-
-        print("\033[1A\033[K" "Saving transfers")
-        self.save_transfers()
 
         print("\033[1A\033[K" "Saving calendar_dates")
         self.save_dates()
