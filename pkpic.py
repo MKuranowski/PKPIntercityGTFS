@@ -2,7 +2,6 @@ import argparse
 import csv
 import ftplib
 import io
-import json
 import os
 import shutil
 import zipfile
@@ -10,10 +9,12 @@ from copy import copy
 from datetime import datetime
 from netrc import netrc
 from tempfile import TemporaryFile
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
+from warnings import warn
 
-import overpass
+import osmiter
 import pytz
+import requests
 
 __title__ = "PKPIntercityGTFS"
 __license__ = "MIT"
@@ -24,50 +25,25 @@ __email__ = "".join(chr(i) for i in [109, 105, 107, 111, 108, 97, 106, 64, 109, 
 # Types
 
 Color = Tuple[str, str]  # background, text
-StopData = Tuple[str, str]  # id, name
-Position = Tuple[float, float]  # lat, lon
 Transfer = Tuple[str, str, str]  # stop, from_train, to_train
 CsvRow = Dict[str, str]
 
 
+class StopData(NamedTuple):
+    id: str
+    name: str
+    ibnr: str = ""
+    lat: float = 0.0
+    lon: float = 0.0
+
+
 # Static Data
 
+STOPS_URL = "https://raw.githubusercontent.com/MKuranowski/PLRailMap/master/plrailmap.osm"
 FTP_ADDR = "ftps.intercity.pl"
 
 ARCH_FTP_PATH = "rozklad/KPD_Rozklad.zip"
 ARCH_CSV_FILE = "KPD_Rozklad.csv"
-
-ADD_STOPS: Dict[str, Position] = {
-    "Warszawa Zachodnia (Peron 8)": (52.221609, 20.961388),
-    "Zduńska Wola Karsznice": (51.58046, 19.00512),
-}
-
-FIX_STOPS: Dict[str, str] = {
-    "BOHUMIN": "BOGUMIN",
-    "RABKA ZDRÓJ": "RABKA-ZDRÓJ",
-    "MOSTISKA 2": "MOŚCISKA 2",
-    "PIWNICZNA ZDRÓJ": "PIWNICZNA-ZDRÓJ",
-    "KUDOWA ZDRÓJ": "KUDOWA-ZDRÓJ",
-    "PETROVICE U KARVINE": "PETROVICE U KARVINÉ",
-    "WARSZAWA ZACHODNIA P8": "WARSZAWA ZACHODNIA (PERON 8)",
-    "KRYNICA": "KRYNICA ZDRÓJ",
-    "GUTKOWO": "OLSZTYN GUTKOWO",
-    "NAKŁO N/NOTECIĄ": "NAKŁO NAD NOTECIĄ",
-    "CHEŁM": "CHEŁM GŁÓWNY",
-    "JAGODIN": "JAGODZIN",
-    "CZECHOWICE DZIEDZICE": "CZECHOWICE-DZIEDZICE",
-    "RUDNIK N/SANEM": "RUDNIK NAD SANEM",
-    "MAŁASZEWICZE PRZYSTANEK": "MAŁASZEWICZE",
-    "GORZÓW WIELKOPOLSKI TEATRALNA": "GORZÓW WIELKOPOLSKI WSCHODNI",
-    "SKALITE": "SKALITÉ",
-    "SKARŻYSKO KAMIENNA": "SKARŻYSKO-KAMIENNA",
-    "KĘDZIERZYN KOŹLE": "KĘDZIERZYN-KOŹLE",
-    "STRZYŻÓW N/WISŁOKIEM": "STRZYŻÓW NAD WISŁOKIEM",
-    "BREST CENTRALNY": "BRZEŚĆ CENTRALNY",
-    "FRANKFURT/ODER": "FRANKFURT (ODER)",
-    "KUŹNICA": "KUŹNICA (HEL)",
-    "WIELEŃ PÓŁNOCNY": "WIELEŃ",
-}
 
 DEFAULT_COLOR: Color = ("DE4E4E", "FFFFFF")
 
@@ -253,10 +229,10 @@ class PKPIntercityGTFS:
     def __init__(self):
         self.version: str = ""
 
-        self.stops: Dict[str, Position] = {}
-        self.stops_used: Set[StopData] = set()
+        self.stops: Dict[str, StopData] = {}
+        self.stop_names_db: Dict[str, str] = {}
+        self.stops_used: Set[str] = set()
         self.stops_invalid: Set[StopData] = set()
-        self.stops_duplicate: Set[str] = set()
 
         self.routes: Set[str] = set()
         self.services: Set[str] = set()
@@ -322,67 +298,24 @@ class PKPIntercityGTFS:
                     for line in in_csv:
                         out_csv.writerow(line)
 
-    def get_stops_overpass(self) -> None:
-        """Get stop positions from OpenStreetMap.
-        Save to self.stops and stops.json."""
-        api = overpass.API(timeout=600)
-        data: dict = api.get(
-            "[out:json][timeout:600][bbox:46.4,12,55,30];"
-            "("
-            "node[railway=station];"
-            "way[railway=station];"
-            "node[railway=halt];"
-            "way[railway=halt];"
-            ");"
-            "out center;",
-            build=False
-        )  # type: ignore
+    def get_stops(self) -> None:
+        # Request the XML file
+        with requests.get(STOPS_URL) as r:
+            r.raise_for_status()
+            buffer = io.BytesIO(r.content)
 
-        # Parse stations
-        for feature in data["elements"]:
-            # Station name
-            if "name:pl" in feature["tags"]:
-                name = feature["tags"]["name:pl"].upper()
-            elif "name" in feature["tags"]:
-                name = feature["tags"]["name"].upper()
-            else:
+        # Parse it
+        for elem in osmiter.iter_from_osm(buffer, file_format="xml", filter_attrs=set()):
+            # Only care about railway=station nodes
+            if elem["type"] != "node" or elem["tag"].get("railway") != "station":
                 continue
 
-            # Some ignore rules
-            # Parkowa Kolejka Maltańska has confusing station names
-            if feature["tags"].get("operator") == "MPK Poznań":
-                continue
-
-            # Also ignore Jagodzin halt in Lower Silesian vv.
-            # In PKP IC "Jagodzin" refers to Ukrainian station Ягодин (right after Dorohusk)
-            if feature["id"] == 2146607462:
-                continue
-
-            # Position
-            if "center" in feature:
-                lat = feature["center"]["lat"]
-                lon = feature["center"]["lon"]
-            else:
-                lat = feature["lat"]
-                lon = feature["lon"]
-
-            # Save info
-            if name in self.stops:
-                self.stops_duplicate.add(name)
-            self.stops[name] = (lat, lon)
-
-        # add stops from ADD_STOPS
-        for name, pos in ADD_STOPS.items():
-            self.stops[name.upper()] = pos
-
-        # save stations
-        with open("stops.json", mode="w", encoding="utf-8") as f:
-            json.dump(self.stops, f, ensure_ascii=False)
-
-    def get_stops_local(self) -> None:
-        """Get stop positions from local file, stops.json"""
-        with open("stops.json", mode="r", encoding="utf-8") as f:
-            self.stops = json.load(f)
+            self.stops[elem["tag"]["ref"]] = StopData(
+                id=elem["tag"]["ref"],
+                ibnr=elem["tag"].get("ref:ibnr", ""),
+                name=elem["tag"]["name"],
+                lat=elem["lat"],
+                lon=elem["lon"])
 
     def save_trips(self) -> None:
         """Parse data from rozklad.csv and save trips and stop_times."""
@@ -446,12 +379,11 @@ class PKPIntercityGTFS:
 
                 for seq, row in enumerate(valid_rows):
                     stop_id = row["NumerStacji"]
-                    stop_name = row["NazwaStacji"].upper()
+                    stop_name = row["NazwaStacji"]
 
-                    stop_name = FIX_STOPS.get(stop_name, stop_name)
-
-                    if stop_name in self.stops:
-                        self.stops_used.add((stop_id, stop_name))
+                    if stop_id in self.stops:
+                        self.stops_used.add(stop_id)
+                        self.stop_names_db[stop_id] = stop_name
 
                         # Fix time values
                         arr = time_to_list(row["Przyjazd"])
@@ -487,7 +419,7 @@ class PKPIntercityGTFS:
                         ])
 
                     else:
-                        self.stops_invalid.add((stop_id, stop_name))
+                        self.stops_invalid.add(StopData(stop_id, stop_name))
 
             else:
                 previous_dep = [0, 0, 0]
@@ -514,12 +446,11 @@ class PKPIntercityGTFS:
 
                     for seq, row in enumerate(leg_rows):
                         stop_id = row["NumerStacji"]
-                        stop_name = row["NazwaStacji"].upper()
+                        stop_name = row["NazwaStacji"]
 
-                        stop_name = FIX_STOPS.get(stop_name, stop_name)
-
-                        if stop_name in self.stops:
-                            self.stops_used.add((stop_id, stop_name))
+                        if stop_id in self.stops:
+                            self.stops_used.add(stop_id)
+                            self.stop_names_db[stop_id] = stop_name
 
                             # Fix time values
                             arr = time_to_list(row["Przyjazd"])
@@ -555,7 +486,7 @@ class PKPIntercityGTFS:
                             ])
 
                         else:
-                            self.stops_invalid.add((stop_id, stop_name))
+                            self.stops_invalid.add(StopData(stop_id, stop_name))
 
         file_trips.close()
         file_times.close()
@@ -563,11 +494,14 @@ class PKPIntercityGTFS:
     def save_stops(self) -> None:
         file = open("gtfs/stops.txt", mode="w", encoding="utf-8", newline="")
         writer = csv.writer(file)
-        writer.writerow(["stop_id", "stop_name", "stop_lat", "stop_lon"])
+        writer.writerow(["stop_id", "stop_name", "stop_lat", "stop_lon", "stop_IBNR"])
 
-        for stop_id, stop_name in self.stops_used:
-            stop_lat, stop_lon = self.stops[stop_name]
-            writer.writerow([stop_id, stop_name.title(), stop_lat, stop_lon])
+        for stop in map(lambda i: self.stops[i], self.stops_used):
+            writer.writerow([stop.id, stop.name, stop.lat, stop.lon, stop.ibnr])
+
+            db_name = self.stop_names_db.get(stop.id, "")
+            if stop.name.casefold() != db_name.casefold():
+                warn(f"Dissimilar stop names for id: {stop.id} - {stop.name!r} vs {db_name!r}")
 
         file.close()
 
@@ -575,8 +509,8 @@ class PKPIntercityGTFS:
         writer = csv.writer(file)
         writer.writerow(["stop_id", "stop_name"])
 
-        for stop_id, stop_name in self.stops_invalid:
-            writer.writerow([stop_id, stop_name])
+        for stop in self.stops_invalid:
+            writer.writerow([stop.id, stop.name])
 
         file.close()
 
@@ -632,7 +566,6 @@ class PKPIntercityGTFS:
         assert isinstance(self.version, str)
 
         pkpic_tstamp = file_mtime("rozklad.csv")
-        osm_tstamp = file_mtime("stops.json")
 
         # Agency
         file = open("gtfs/agency.txt", mode="w", encoding="utf-8", newline="\r\n")
@@ -644,10 +577,6 @@ class PKPIntercityGTFS:
         file = open("gtfs/attributions.txt", mode="w", encoding="utf-8", newline="\r\n")
         file.write("organization_name,is_producer,is_operator,is_authority,"
                    "is_data_source,attribution_url\n")
-
-        file.write('"Stop positions provided by: © OpenStreetMap contributors '
-                   f'(under ODbL license, retrieved {osm_tstamp})",0,0,1,'
-                   '1,"https://www.openstreetmap.org/copyright/"\n')
 
         file.write(f'"Schedules provided by: PKP Intercity S.A. (retrieved {pkpic_tstamp})",0,1,0,'
                    '1,"https://intercity.pl/"\n')
@@ -672,7 +601,7 @@ class PKPIntercityGTFS:
 
     @classmethod
     def create(cls, ftp_user: str, ftp_pass: str, ignore_version: str = "",
-               refresh_osm: bool = False, pub_name: str = "", pub_url: str = ""):
+               pub_name: str = "", pub_url: str = ""):
         self = cls()
 
         print("Downloading file")
@@ -697,13 +626,8 @@ class PKPIntercityGTFS:
                 else:
                     os.remove(f.path)
 
-        if refresh_osm:
-            print("\033[1A\033[K" "Downloading stops")
-            self.get_stops_overpass()
-
-        else:
-            print("\033[1A\033[K" "Loading stops")
-            self.get_stops_local()
+        print("\033[1A\033[K" "Downloading stops")
+        self.get_stops()
 
         print("\033[1A\033[K" "Parsing trips")
         self.save_trips()
@@ -732,13 +656,6 @@ if __name__ == "__main__":
     argprs = argparse.ArgumentParser()
 
     argprs.add_argument(
-        "-o", "--refresh-osm",
-        action="store_true",
-        required=False,
-        help="re-download file stops.json"
-    )
-
-    argprs.add_argument(
         "-i", "--ignore-version",
         action="store_true",
         required=False,
@@ -764,5 +681,5 @@ if __name__ == "__main__":
     args = argprs.parse_args()
     ftp_user, ftp_pass = resolve_ftp_login()
 
-    PKPIntercityGTFS.create(ftp_user, ftp_pass, args.ignore_version, args.refresh_osm,
+    PKPIntercityGTFS.create(ftp_user, ftp_pass, args.ignore_version,
                             args.publisher_name, args.publisher_url)
