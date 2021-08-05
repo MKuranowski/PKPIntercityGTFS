@@ -350,6 +350,7 @@ class PKPIntercityGTFS:
             gtfs_trip[0] = "ZKA " + gtfs_trip[0]
         self.routes.add(gtfs_trip[0])
 
+        dist_offset = int(leg[0]["DrogaKumulowanaMetry"])
         wrtr_trips.writerow(gtfs_trip)
 
         for seq, row in enumerate(leg):
@@ -375,10 +376,11 @@ class PKPIntercityGTFS:
                 platform_dep = ""
 
             platform = platform_dep or platform_arr
+            dist = int(row["DrogaKumulowanaMetry"]) - dist_offset
 
             # Dump to GTFS
             wrtr_times.writerow([gtfs_trip[2], seq, stop_id, row["Przyjazd"], row["Odjazd"],
-                                 platform])
+                                 platform, dist])
 
     def save_trip_multiple_legs(self, wrtr_trips: "csv._writer", wrtr_times: "csv._writer",
                                 wrtr_transfers: "csv._writer", base_trip: List[str],
@@ -417,6 +419,7 @@ class PKPIntercityGTFS:
         wrtr_times.writerow([
             "trip_id", "stop_sequence", "stop_id",
             "arrival_time", "departure_time", "platform",
+            "official_dist_traveled",
         ])
 
         file_transfers = open("gtfs/transfers.txt", mode="w", encoding="utf8", newline="")
