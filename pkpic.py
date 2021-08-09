@@ -321,6 +321,9 @@ class PKPIntercityGTFS:
                     out_csv = csv.writer(out_file)
 
                     for line in in_csv:
+                        # Replace "NULL" with "", something's wrong in PKP IC export
+                        # process, whatever
+                        line = ("" if i == "NULL" else i for i in line)
                         out_csv.writerow(line)
 
     def get_stops(self) -> None:
@@ -369,10 +372,10 @@ class PKPIntercityGTFS:
             platform_arr = row["PeronWjazd"]
             platform_dep = row["PeronWyjazd"]
 
-            if platform_arr.upper() in {"BUS", "NULL"}:
+            if platform_arr.upper() == "BUS":
                 platform_arr = ""
 
-            if platform_dep.upper() in {"BUS", "NULL"}:
+            if platform_dep.upper() == "BUS":
                 platform_dep = ""
 
             platform = platform_dep or platform_arr
@@ -437,6 +440,10 @@ class PKPIntercityGTFS:
             category = rows[0]["KategoriaHandlowa"].replace("  ", " ")
             number = rows[0]["NrPociaguHandlowy"]
             name = rows[0]["NazwaPociagu"]
+
+            # Hotfix for missing NrPociaguHandlowy
+            if number == "":
+                number, _, _ = rows[0]["NrPociagu"].partition("/")
 
             service_id = rows[0]["DataOdjazdu"]
             train_id = service_id + "_" + rows[0]["NrPociagu"].replace("/", "-")
