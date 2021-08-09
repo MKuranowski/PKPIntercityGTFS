@@ -48,10 +48,12 @@ DEFAULT_COLOR: Color = ("DE4E4E", "FFFFFF")
 
 ROUTE_COLORS: Dict[str, Color] = {
     "TLK": ("8505A3", "FFFFFF"),
+    "TLK IC": ("8505A3", "FFFFFF"),
     "IC": ("F25E18", "FFFFFF"),
     "IC EIC": ("898989", "FFFFFF"),
     "EC": ("9D740F", "FFFFFF"),
     "EIC": ("898989", "FFFFFF"),
+    "EIC IC": ("898989", "FFFFFF"),
     "EIP": ("002664", "FFFFFF"),
     "EN": ("000000", "FFFFFF"),
 }
