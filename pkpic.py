@@ -258,6 +258,7 @@ class PKPIntercityGTFS:
         self.version: str = ""
 
         self.stops: Dict[str, StopData] = {}
+        self.stop_id_swap: Dict[str, str] = {}
         self.stop_names_db: Dict[str, str] = {}
         self.stops_used: Set[str] = set()
         self.stops_invalid: Set[StopData] = set()
@@ -339,6 +340,9 @@ class PKPIntercityGTFS:
             # Only care about railway=station nodes
             if elem["type"] != "node" or elem["tag"].get("railway") != "station":
                 continue
+
+            if "ref:2" in elem["tag"]:
+                self.stop_id_swap[elem["tag"]["ref:2"]] = elem["tag"]["ref"]
 
             self.stops[elem["tag"]["ref"]] = StopData(
                 id=elem["tag"]["ref"],
@@ -437,6 +441,10 @@ class PKPIntercityGTFS:
         for rows in train_loader("rozklad.csv"):
             # Filter "stations" without passanger exchange
             rows = train_fixup(rows)
+
+            # Swap stop_ids
+            for row in rows:
+                row["NumerStacji"] = self.stop_id_swap.get(row["NumerStacji"], row["NumerStacji"])
 
             # Get some info about the train
             category = rows[0]["KategoriaHandlowa"].replace("  ", " ")
