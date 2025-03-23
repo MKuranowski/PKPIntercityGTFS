@@ -3,12 +3,21 @@
 
 from argparse import Namespace
 
-import impuls
+from impuls import App, Pipeline, PipelineOptions
+from impuls.resource import ZippedResource
+
+from .ftp import FTPResource
 
 
-class PKPIntercityGTFS(impuls.App):
-    def prepare(self, args: Namespace, options: impuls.PipelineOptions) -> impuls.Pipeline:
-        return impuls.Pipeline(
+class PKPIntercityGTFS(App):
+    def prepare(self, args: Namespace, options: PipelineOptions) -> Pipeline:
+        return Pipeline(
             tasks=[],
+            resources={
+                "kpd_rozklad.csv": ZippedResource(
+                    r=FTPResource("rozklad/KPD_Rozklad.zip"),
+                    file_name_in_zip="KPD_Rozklad.csv",
+                )
+            },
             options=options,
         )

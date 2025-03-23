@@ -10,3 +10,6 @@ stops_missing.csv
 rozklad.csv
 stops.json
 version.txt
+*.pyc
+.env
+_impuls_workspace/
