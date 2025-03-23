@@ -1,3 +1,1 @@
-osmiter
-requests
-pytz
+impuls ~= 2.1.2
