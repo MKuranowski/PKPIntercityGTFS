@@ -6,7 +6,7 @@ from argparse import Namespace
 from impuls import App, Pipeline, PipelineOptions
 from impuls.model import Agency
 from impuls.resource import HTTPResource, ZippedResource
-from impuls.tasks import AddEntity, ExecuteSQL
+from impuls.tasks import AddEntity, ExecuteSQL, GenerateTripHeadsign
 
 from .ftp import FTPResource
 from .load_csv import LoadCSV
@@ -36,7 +36,7 @@ class PKPIntercityGTFS(App):
                 ),
                 LoadStationData(),
                 SimplifyRoutes(),
-                # TODO: generate headsigns
+                GenerateTripHeadsign(),
                 # TODO: split bus legs
                 # TODO: curate routes
                 # TODO: create feed info
