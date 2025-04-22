@@ -1,0 +1,15 @@
+route_id,route_short_name,route_long_name,route_sort_order,route_color,route_text_color
+EIP,EIP,Express InterCity Premium,1,002664,FFFFFF
+EIP_BUS,ZKA EIP,Express InterCity Premium - Zastępcza Komunikacja Autobusowa,2,DE4E4E,FFFFFF
+EIC,EIC,Express InterCity,3,898989,FFFFFF
+EIC_BUS,ZKA EIC,Express InterCity - Zastępcza Komunikacja Autobusowa,4,DE4E4E,FFFFFF
+IC,IC,InterCity,5,F25E18,FFFFFF
+IC_BUS,ZKA IC,InterCity - Zastępcza Komunikacja Autobusowa,6,DE4E4E,FFFFFF
+TLK,TLK,Twoje Linie Kolejowe,7,8505A3,FFFFFF
+TLK_BUS,ZKA TLK,Twoje Linie Kolejowe - Zastępcza Komunikacja Autobusowa,8,DE4E4E,FFFFFF
+EN,EN,EuroNight,9,000000,FFFFFF
+EN_BUS,ZKA EN,EuroNight - Zastępcza Komunikacja Autobusowa,10,DE4E4E,FFFFFF
+EC,EC,EuroCity,11,9D740F,FFFFFF
+EC_BUS,ZKA EC,EuroCity - Zastępcza Komunikacja Autobusowa,12,DE4E4E,FFFFFF
+MP,MP,Międzynarodowy Pospieszny,13,4F4F4F,FFFFFF
+MP_BUS,ZKA MP,Międzynarodowy Pospieszny - Zastępcza Komunikacja Autobusowa,14,DE4E4E,FFFFFF

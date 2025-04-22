@@ -6,8 +6,14 @@ from argparse import Namespace
 
 from impuls import App, Pipeline, PipelineOptions
 from impuls.model import Agency
-from impuls.resource import HTTPResource, ZippedResource
-from impuls.tasks import AddEntity, ExecuteSQL, GenerateTripHeadsign, SplitTripLegs
+from impuls.resource import HTTPResource, LocalResource, ZippedResource
+from impuls.tasks import (
+    AddEntity,
+    ExecuteSQL,
+    GenerateTripHeadsign,
+    ModifyRoutesFromCSV,
+    SplitTripLegs,
+)
 
 from .ftp import FTPResource
 from .load_csv import LoadCSV
@@ -39,7 +45,7 @@ class PKPIntercityGTFS(App):
                 SimplifyRoutes(),
                 GenerateTripHeadsign(),
                 SplitTripLegs(replacement_bus_short_name_pattern=re.compile(r"\bZKA\b", re.I)),
-                # TODO: curate routes
+                ModifyRoutesFromCSV("routes.csv", must_curate_all=True, silent=True),
                 # TODO: create feed info
                 # TODO: save GTFS
             ],
@@ -51,6 +57,7 @@ class PKPIntercityGTFS(App):
                 "pl_rail_map.osm": HTTPResource.get(
                     "https://raw.githubusercontent.com/MKuranowski/PLRailMap/master/plrailmap.osm"
                 ),
+                "routes.csv": LocalResource("data/routes.csv"),
             },
             options=options,
         )
