@@ -11,6 +11,7 @@ from impuls.tasks import AddEntity, ExecuteSQL
 from .ftp import FTPResource
 from .load_csv import LoadCSV
 from .load_stations import LoadStationData
+from .simplify_routes import SimplifyRoutes
 
 
 class PKPIntercityGTFS(App):
@@ -34,10 +35,10 @@ class PKPIntercityGTFS(App):
                     task_name="RemoveBohuminVrbice",
                 ),
                 LoadStationData(),
-                # TODO: remove redundant routes
-                # TODO: curate routes
+                SimplifyRoutes(),
                 # TODO: generate headsigns
                 # TODO: split bus legs
+                # TODO: curate routes
                 # TODO: create feed info
                 # TODO: save GTFS
             ],
