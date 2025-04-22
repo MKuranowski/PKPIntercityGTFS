@@ -5,11 +5,12 @@ from argparse import Namespace
 
 from impuls import App, Pipeline, PipelineOptions
 from impuls.model import Agency
-from impuls.resource import ZippedResource
-from impuls.tasks import AddEntity
+from impuls.resource import HTTPResource, ZippedResource
+from impuls.tasks import AddEntity, ExecuteSQL
 
 from .ftp import FTPResource
 from .load_csv import LoadCSV
+from .load_stations import LoadStationData
 
 
 class PKPIntercityGTFS(App):
@@ -28,12 +29,26 @@ class PKPIntercityGTFS(App):
                     task_name="AddAgency",
                 ),
                 LoadCSV(),
+                ExecuteSQL(
+                    statement="DELETE FROM stops WHERE stop_id = '201084'",
+                    task_name="RemoveBohuminVrbice",
+                ),
+                LoadStationData(),
+                # TODO: remove redundant routes
+                # TODO: curate routes
+                # TODO: generate headsigns
+                # TODO: split bus legs
+                # TODO: create feed info
+                # TODO: save GTFS
             ],
             resources={
                 "kpd_rozklad.csv": ZippedResource(
                     r=FTPResource("rozklad/KPD_Rozklad.zip"),
                     file_name_in_zip="KPD_Rozklad.csv",
-                )
+                ),
+                "pl_rail_map.osm": HTTPResource.get(
+                    "https://raw.githubusercontent.com/MKuranowski/PLRailMap/master/plrailmap.osm"
+                ),
             },
             options=options,
         )
