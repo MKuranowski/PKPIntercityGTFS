@@ -67,7 +67,7 @@ class FTPResource(ConcreteResource):
 
 def get_credentials() -> tuple[str, str]:
     c = os.getenv("INTERCITY_FTP_CREDENTIALS")
-    if not c and (p := os.getenv("INTERCITY_FTP_CREDENTIALS_PATH")):
+    if not c and (p := os.getenv("INTERCITY_FTP_CREDENTIALS_FILE")):
         with open(p, "r", encoding="utf-8-sig") as f:
             c = f.read()
 
