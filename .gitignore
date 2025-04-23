@@ -1,15 +1,7 @@
 __pycache__
 .vscode
-gtfs
-ignore*
 *.netrc
-*.sh
 *.zip
-*.html
-stops_missing.csv
-rozklad.csv
-stops.json
-version.txt
 *.pyc
 .env
-_impuls_workspace/
+_impuls_workspace
