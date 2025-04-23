@@ -15,6 +15,7 @@ from impuls.tasks import (
     SplitTripLegs,
 )
 
+from .create_feed_info import CreateFeedInfo
 from .ftp import FTPResource
 from .load_csv import LoadCSV
 from .load_stations import LoadStationData
@@ -46,7 +47,7 @@ class PKPIntercityGTFS(App):
                 GenerateTripHeadsign(),
                 SplitTripLegs(replacement_bus_short_name_pattern=re.compile(r"\bZKA\b", re.I)),
                 ModifyRoutesFromCSV("routes.csv", must_curate_all=True, silent=True),
-                # TODO: create feed info
+                CreateFeedInfo(),
                 # TODO: save GTFS
             ],
             resources={
