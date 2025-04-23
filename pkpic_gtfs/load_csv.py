@@ -110,7 +110,6 @@ def parse_train(rows: list[CSVRow]) -> tuple[Trip, list[StopTime]]:
     for idx, row in enumerate(rows):
         # Basic stop info
         stop_id = row["NumerStacji"]
-        stop_name = row["NazwaStacji"]
         dist = int(row["DrogaKumulowanaMetry"]) - dist_offset
 
         # Parse time
@@ -135,7 +134,7 @@ def parse_train(rows: list[CSVRow]) -> tuple[Trip, list[StopTime]]:
             arrival_time=TimePoint(seconds=arr),
             departure_time=TimePoint(seconds=dep),
             platform=platform,
-            extra_fields_json=json.dumps({"fare_dist_m": dist, "stop_name": stop_name}),
+            extra_fields_json=json.dumps({"fare_dist_m": str(dist)}),
         )
 
         stop_times.append(stop_time)

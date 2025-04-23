@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import re
-from argparse import Namespace
+from argparse import ArgumentParser, Namespace
 
 from impuls import App, Pipeline, PipelineOptions
 from impuls.model import Agency
@@ -12,17 +12,27 @@ from impuls.tasks import (
     ExecuteSQL,
     GenerateTripHeadsign,
     ModifyRoutesFromCSV,
+    SaveGTFS,
     SplitTripLegs,
 )
 
 from .create_feed_info import CreateFeedInfo
 from .ftp import FTPResource
+from .gtfs import GTFS_HEADERS
 from .load_csv import LoadCSV
 from .load_stations import LoadStationData
 from .simplify_routes import SimplifyRoutes
 
 
 class PKPIntercityGTFS(App):
+    def add_arguments(self, parser: ArgumentParser) -> None:
+        parser.add_argument(
+            "-o",
+            "--output",
+            default="pkpic.zip",
+            help="path to the output GTFS file",
+        )
+
     def prepare(self, args: Namespace, options: PipelineOptions) -> Pipeline:
         return Pipeline(
             tasks=[
@@ -48,7 +58,7 @@ class PKPIntercityGTFS(App):
                 SplitTripLegs(replacement_bus_short_name_pattern=re.compile(r"\bZKA\b", re.I)),
                 ModifyRoutesFromCSV("routes.csv", must_curate_all=True, silent=True),
                 CreateFeedInfo(),
-                # TODO: save GTFS
+                SaveGTFS(headers=GTFS_HEADERS, target=args.output, ensure_order=True),
             ],
             resources={
                 "kpd_rozklad.csv": ZippedResource(
