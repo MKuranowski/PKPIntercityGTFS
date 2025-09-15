@@ -22,6 +22,7 @@ from .gtfs import GTFS_HEADERS
 from .load_csv import LoadCSV
 from .load_stations import LoadStationData
 from .simplify_routes import SimplifyRoutes
+from .load_platforms import LoadPlatformData
 
 
 class PKPIntercityGTFS(App):
@@ -53,6 +54,7 @@ class PKPIntercityGTFS(App):
                     task_name="RemoveBohuminVrbice",
                 ),
                 LoadStationData(),
+                LoadPlatformData(),
                 SimplifyRoutes(),
                 GenerateTripHeadsign(),
                 SplitTripLegs(replacement_bus_short_name_pattern=re.compile(r"\bZKA\b", re.I)),
@@ -67,6 +69,9 @@ class PKPIntercityGTFS(App):
                 ),
                 "pl_rail_map.osm": HTTPResource.get(
                     "https://raw.githubusercontent.com/MKuranowski/PLRailMap/master/plrailmap.osm"
+                ),
+                "platforms.json": HTTPResource.get(
+                    "https://kasmar00.github.io/osm-plk-platform-validator/platforms-list.json"
                 ),
                 "routes.csv": LocalResource("data/routes.csv"),
             },

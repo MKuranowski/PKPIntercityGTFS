@@ -127,6 +127,8 @@ def parse_train(rows: list[CSVRow]) -> tuple[Trip, list[StopTime]]:
         else:
             platform = normalize_platform(row["PeronWyjazd"] or row["PeronWjazd"])
 
+        track = row["TorWjazd"] or row["TorWyjazd"]
+
         stop_time = StopTime(
             trip_id=trip_id,
             stop_id=stop_id,
@@ -134,7 +136,7 @@ def parse_train(rows: list[CSVRow]) -> tuple[Trip, list[StopTime]]:
             arrival_time=TimePoint(seconds=arr),
             departure_time=TimePoint(seconds=dep),
             platform=platform,
-            extra_fields_json=json.dumps({"fare_dist_m": str(dist)}),
+            extra_fields_json=json.dumps({"fare_dist_m": str(dist), "track": track}),
         )
 
         stop_times.append(stop_time)

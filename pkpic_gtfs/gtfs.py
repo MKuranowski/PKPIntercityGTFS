@@ -10,7 +10,7 @@ GTFS_HEADERS = {
         "agency_lang",
         "agency_phone",
     ),
-    "stops.txt": ("stop_id", "stop_name", "stop_lat", "stop_lon"),
+    "stops.txt": ("stop_id", "stop_name", "stop_lat", "stop_lon", "platform_code"),
     "routes.txt": (
         "agency_id",
         "route_id",
