@@ -27,6 +27,7 @@ GTFS_HEADERS = {
         "service_id",
         "trip_headsign",
         "trip_short_name",
+        "block_id",
         "plk_train_number",
     ),
     "stop_times.txt": (
