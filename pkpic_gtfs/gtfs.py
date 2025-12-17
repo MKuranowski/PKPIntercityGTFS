@@ -29,6 +29,7 @@ GTFS_HEADERS = {
         "trip_short_name",
         "block_id",
         "plk_train_number",
+        "carriages",
     ),
     "stop_times.txt": (
         "trip_id",
@@ -40,6 +41,8 @@ GTFS_HEADERS = {
         "track",
         "fare_dist_m",
         "vehicle_kind",
+        "pickup_type",
+        "drop_off_type",
     ),
     "transfers.txt": (
         "from_stop_id",
