@@ -1,20 +1,12 @@
 # Copyright (c) 2025 Mikołaj Kuranowski
 # SPDX-License-Identifier: MIT
 
-import re
 from argparse import ArgumentParser, Namespace
 
 from impuls import App, Pipeline, PipelineOptions
 from impuls.model import Agency
 from impuls.resource import HTTPResource, LocalResource
-from impuls.tasks import (
-    AddEntity,
-    ExecuteSQL,
-    GenerateTripHeadsign,
-    ModifyRoutesFromCSV,
-    SaveGTFS,
-    SplitTripLegs,
-)
+from impuls.tasks import AddEntity, ExecuteSQL, GenerateTripHeadsign, ModifyRoutesFromCSV, SaveGTFS
 
 from .create_feed_info import CreateFeedInfo
 from .ftp import FTPResource
@@ -23,6 +15,7 @@ from .in_seat_transfers import AssignBlockIds, FixTimeTravelTransfers, GenerateI
 from .load_csv import LoadCSV
 from .load_stations import LoadStationData
 from .simplify_routes import SimplifyRoutes
+from .split_trip_legs import SplitTripLegsRetainingTransfers
 
 
 class PKPIntercityGTFS(App):
@@ -76,7 +69,7 @@ class PKPIntercityGTFS(App):
                 GenerateTripHeadsign(),
                 GenerateInSeatTransfers(),
                 FixTimeTravelTransfers(),
-                SplitTripLegs(replacement_bus_short_name_pattern=re.compile(r"\bZKA\b", re.I)),
+                SplitTripLegsRetainingTransfers(),
                 AssignBlockIds(),
                 ModifyRoutesFromCSV("routes.csv", must_curate_all=True, silent=True),
                 CreateFeedInfo(),
