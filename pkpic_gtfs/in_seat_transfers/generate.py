@@ -287,14 +287,14 @@ class GenerateInSeatTransfers(Task):
 
     def __init__(self) -> None:
         super().__init__()
-        self.block_id_counters = defaultdict[str, int](lambda: 0)
+        self.trip_copy_counters = defaultdict[str, int](lambda: 0)
 
     def clear(self) -> None:
-        self.block_id_counters.clear()
+        self.trip_copy_counters.clear()
 
-    def _get_next_block_id(self, date_prefix: str = "") -> str:
-        id = f"{date_prefix}_B{self.block_id_counters[date_prefix]}"
-        self.block_id_counters[date_prefix] += 1
+    def _get_unique_trip_id(self, trip_id: str) -> str:
+        id = f"{trip_id}_C{self.trip_copy_counters[trip_id]}"
+        self.trip_copy_counters[trip_id] += 1
         return id
 
     def execute(self, r: TaskRuntime) -> None:
@@ -370,8 +370,6 @@ class GenerateInSeatTransfers(Task):
         return trips
 
     def insert_block_trips(self, db: DBConnection, b: Block) -> None:
-        date_str = b.last_trip_id.partition("_")[0]
-        block_id = self._get_next_block_id(date_str)
         previous_trip_id: str | None = None
         headsign = self._get_stop_name(db, b.last_trip_id, b.legs[-1].to_stop_sequence)
         carriages = "/".join(sorted(b.carriages))
@@ -381,8 +379,7 @@ class GenerateInSeatTransfers(Task):
             is_last = i == len(b.legs) - 1
 
             trip = db.retrieve_must(Trip, leg.trip_id)
-            trip.id = f"{block_id}-{i}"
-            trip.block_id = block_id
+            trip.id = self._get_unique_trip_id(trip.id)
             trip.headsign = headsign
             trip.set_extra_field("carriages", carriages)
 

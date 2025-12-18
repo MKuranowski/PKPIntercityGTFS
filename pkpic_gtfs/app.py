@@ -18,8 +18,8 @@ from impuls.tasks import (
 
 from .create_feed_info import CreateFeedInfo
 from .ftp import FTPResource
-from .generate_in_seat_transfers import GenerateInSeatTransfers
 from .gtfs import GTFS_HEADERS
+from .in_seat_transfers import AssignBlockIds, FixTimeTravelTransfers, GenerateInSeatTransfers
 from .load_csv import LoadCSV
 from .load_stations import LoadStationData
 from .simplify_routes import SimplifyRoutes
@@ -75,7 +75,9 @@ class PKPIntercityGTFS(App):
                 SimplifyRoutes(),
                 GenerateTripHeadsign(),
                 GenerateInSeatTransfers(),
+                FixTimeTravelTransfers(),
                 SplitTripLegs(replacement_bus_short_name_pattern=re.compile(r"\bZKA\b", re.I)),
+                AssignBlockIds(),
                 ModifyRoutesFromCSV("routes.csv", must_curate_all=True, silent=True),
                 CreateFeedInfo(),
                 SaveGTFS(headers=GTFS_HEADERS, target=args.output, ensure_order=True),
