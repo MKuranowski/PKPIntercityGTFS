@@ -2,17 +2,25 @@
 # SPDX-License-Identifier: MIT
 
 import csv
+import logging
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Hashable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from io import TextIOWrapper
-from typing import LiteralString, Self, cast
+from itertools import combinations
+from operator import attrgetter
+from typing import Callable, LiteralString, Self, TypeVar, cast
 from zipfile import ZipFile
 
 from impuls import DBConnection, Task, TaskRuntime
 from impuls.model import Date, StopTime, Transfer, Trip
 from impuls.tools.temporal import DateRange, InfiniteDateRange, date_range
 from impuls.tools.types import SQLNativeType, StrPath
+
+from ..util import DisjointSet
+
+_K = TypeVar("_K", bound=Hashable)
+_V = TypeVar("_V")
 
 
 @dataclass
@@ -55,7 +63,11 @@ class TripStops:
     """
 
     trip_id: str
-    stop_sequence_by_id: dict[str, int]
+    stop_sequence_by_id: dict[str, int] = field(default_factory=dict[str, int])
+
+    def insert_stop(self, idx: int, stop_id: str) -> None:
+        # If trip stops multiple times at the given stop_id, only record the smallest index
+        self.stop_sequence_by_id.setdefault(stop_id, idx)
 
     def resolve_stop(self, stop: str | int) -> int:
         """Resolves a stop_id (str) into a stop_sequence (int),
@@ -84,6 +96,7 @@ class Connection:
     to_trip_id: str
     at_stop_id: str
     carriages: frozenset[str]
+    id: int = 0
 
     def with_trip_id_prefix(self, prefix: str) -> Self:
         """Returns a copy of this Connection, but with prefix prepended to both trip_ids."""
@@ -111,6 +124,72 @@ class Connection:
             and self.at_stop_id in trips[self.to_trip_id].stop_sequence_by_id
         )
 
+    @staticmethod
+    def group_related(connections: Iterable["Connection"]) -> Iterable[list["Connection"]]:
+        """Groups multiple Connections together if they switch the same carriages.
+        Two Connections will be in the same group if their trip and carriage sets intersect.
+        """
+        by_conn_id = build_index(Connection.deduplicate(connections), attrgetter("id"))
+        related = DisjointSet(by_conn_id)
+
+        for a, b in combinations(by_conn_id.values(), 2):
+            trips_intersect = (
+                a.from_trip_id == b.from_trip_id
+                or a.from_trip_id == b.to_trip_id
+                or a.to_trip_id == b.from_trip_id
+                or a.to_trip_id == b.to_trip_id
+            )
+            carriages_intersect = not a.carriages.isdisjoint(b.carriages)
+            if trips_intersect and carriages_intersect:
+                related.merge(a.id, b.id)
+
+        for ids in related.get_groups().values():
+            yield [by_conn_id[i] for i in ids]
+
+    @staticmethod
+    def deduplicate(connections: Iterable["Connection"]) -> list["Connection"]:
+        """Ensures (from_trip_id, to_trip_id, at_stop_id) is a unique key within Connections.
+
+        If multiple Connections link up two trips at the same stop, the returned Connection
+        will have the ID of the first such connection and carriages as the union of all
+        such connections.
+
+        >>> Connection.deduplicate([Connection("T1", "T2", "S0", frozenset({"1", "2"}), 1),
+        ...                         Connection("T1", "T2", "S0", frozenset({"2", "3"}), 2)])
+        [Connection("T1", "T2", "S0", frozenset({'1', '2', '3'}), 1)]
+        """
+        unique = dict[tuple[str, str, str], tuple[int, set[str]]]()
+        for c in connections:
+            key = c.from_trip_id, c.to_trip_id, c.at_stop_id
+            if existing := unique.get(key):
+                existing[1].update(c.carriages)
+            else:
+                unique[key] = c.id, set(c.carriages)
+        return [
+            Connection(from_trip_id, to_trip_id, at_stop_id, frozenset(carriages), id)
+            for (from_trip_id, to_trip_id, at_stop_id), (id, carriages) in unique.items()
+        ]
+
+    @staticmethod
+    def get_disjoint_carriage_sets(connections: Iterable["Connection"]) -> DisjointSet[str]:
+        """Returns a DisjointSet of all carriages used by the provided connections,
+        where two carriages are in the same set if and only if they use exactly
+        the same connections.
+        """
+
+        # Compute the set of used connections for each carriage
+        carriage_connections = defaultdict[str, set[int]](set)
+        for connection in connections:
+            for carriage in connection.carriages:
+                carriage_connections[carriage].add(connection.id)
+
+        # Merge carriages with exactly the same connection set
+        carriages = DisjointSet(carriage_connections)
+        for (a, a_connections), (b, b_connections) in combinations(carriage_connections.items(), 2):
+            if a_connections == b_connections:
+                carriages.merge(a, b)
+        return carriages
+
     @classmethod
     def read_all(
         cls,
@@ -124,6 +203,7 @@ class Connection:
                 to_trip_id=row["NrPoc2"].replace("/", "-"),
                 at_stop_id=row["objectID"],
                 carriages=frozenset(row["carriageNo"].split(",")),
+                id=int(row["ID_przelaczenia"]),
             )
 
             yield from map(
@@ -185,98 +265,158 @@ class Block:
         )
 
     @classmethod
-    def find_all_deduplicated(
-        cls,
-        connections: Iterable[Connection],
-        trips: Mapping[str, TripStops],
-    ) -> list["Block"]:
-        """Finds all Blocks given a set of Connections and Trip data, then deduplicates them."""
-        return cls.deduplicate(cls.find_all(connections, trips))
-
-    @classmethod
     def find_all(
         cls,
         connections: Iterable[Connection],
         trips: Mapping[str, TripStops],
+        logger: logging.Logger = logging.getLogger("BlockResolver"),
     ) -> Iterable[Self]:
         """Finds all Blocks given a set of Connections and Trip data."""
-        connections_by_from_trip_id = defaultdict[str, list[Connection]](list)
-        queue = list[Self]()
+        for connection_group in Connection.group_related(connections):
+            yield from cls.resolve(connection_group, trips, logger=logger)
 
-        # Initialize the search space
-        for connection in connections:
-            connections_by_from_trip_id[connection.from_trip_id].append(connection)
-            block = cls(
-                [
-                    trips[connection.from_trip_id].up_to(connection.at_stop_id),
-                    trips[connection.to_trip_id].starting_at(connection.at_stop_id),
-                ],
-                connection.carriages,
+    @classmethod
+    def resolve(
+        cls,
+        connections: Sequence[Connection],
+        trips: Mapping[str, TripStops],
+        logger: logging.Logger = logging.getLogger("BlockResolver"),
+    ) -> list[Self]:
+        """Resolves an independent set of connections given trip data into blocks.
+        Any NonLinearBlock errors are caught and logged on the provided logger.
+        """
+        # Fast path for groups of one connection
+        if len(connections) == 1:
+            return [cls.resolve_single(connections[0], trips)]
+
+        # Route each unique carriage group through the set of connections
+        carriage_sets = Connection.get_disjoint_carriage_sets(connections).get_groups()
+        blocks = list[Self]()
+        for root_carriage, carriage_set in carriage_sets.items():
+            try:
+                block = cls.resolve_linear(
+                    connections=[c for c in connections if root_carriage in c.carriages],
+                    trips=trips,
+                    carriages=frozenset(carriage_set),
+                )
+                blocks.append(block)
+            except NonLinearBlock as e:
+                e.log(logger)
+        return blocks
+
+    @classmethod
+    def resolve_single(cls, c: Connection, trips: Mapping[str, TripStops]) -> Self:
+        """Resolved a block using a single connection."""
+        return cls(
+            [
+                trips[c.from_trip_id].up_to(c.at_stop_id),
+                trips[c.to_trip_id].starting_at(c.at_stop_id),
+            ],
+            c.carriages,
+        )
+
+    @classmethod
+    def resolve_linear(
+        cls,
+        connections: Sequence[Connection],
+        trips: Mapping[str, TripStops],
+        carriages: frozenset[str],
+    ) -> Self:
+        """Resolves a block from multiple connections, assuming they form a linear link.
+        If that assumption does not hold, raises NonLinearBlock.
+        """
+        legs = list[TripSlice]()
+
+        # Create a lookup table on from_trip_id for traversal of the block
+        try:
+            connections_by_from_trip_id = build_index(connections, attrgetter("from_trip_id"))
+        except ValueError:
+            raise NonLinearBlock.from_connections(
+                "from_trip_id is not unique",
+                carriages,
+                connections,
             )
 
-            if block.last_trip_id not in connections_by_from_trip_id:
-                # Fast path for connections without any possible continuations
-                yield block
-            else:
-                queue.append(block)
+        # Find the very first trip
+        first_trip = cls._find_initial_trip_in_linear_block(connections)
+        if not first_trip:
+            raise NonLinearBlock.from_connections("no initial trip", carriages, connections)
 
-        # Generate all blocks which can continue
-        while queue:
-            block = queue.pop()
-            further_candidates = [
-                c
-                for c in connections_by_from_trip_id[block.last_trip_id]
-                if c.carriages.issubset(block.carriages)
-                and trips[c.from_trip_id].stops_later(block.last_from_stop_seq, c.at_stop_id)
-            ]
+        # Create legs by following the connections forwards
+        conn = connections_by_from_trip_id.pop(cls._find_initial_trip_in_linear_block(connections))
+        legs.append(trips[conn.from_trip_id].up_to(conn.at_stop_id))
+        while next := connections_by_from_trip_id.pop(conn.to_trip_id, None):
+            t = trips[next.from_trip_id]
+            start = t.stop_sequence_by_id[conn.at_stop_id]
+            end = t.stop_sequence_by_id[next.at_stop_id]
+            if start >= end:
+                raise NonLinearBlock.from_connections(
+                    f"goes backwards on trip {t.trip_id} ({start} → {end})",
+                    carriages,
+                    connections,
+                )
+            legs.append(TripSlice(t.trip_id, start, end))
 
-            if further_candidates:
-                # The block continues - add all continuations back to the queue
-                for connection in further_candidates:
-                    new = block.copy()
+            conn = next
 
-                    # Trim the last leg to connection.at_stop_id
-                    to_idx = trips[block.last_trip_id].stop_sequence_by_id[connection.at_stop_id]
-                    new.legs[-1] = replace(new.legs[-1], to_stop_sequence=to_idx)
+        # Append the last leg
+        legs.append(trips[conn.to_trip_id].starting_at(conn.at_stop_id))
 
-                    # Add the leg implied by the connection
-                    new.legs.append(trips[connection.to_trip_id].starting_at(connection.at_stop_id))
+        # Ensure we have used all of the connections
+        if connections_by_from_trip_id:
+            raise NonLinearBlock.from_connections("is disjoint", carriages, connections)
 
-                    # Recalculate the carriages
-                    new.carriages = new.carriages & connection.carriages
-
-                    # Add back the block to the queue
-                    queue.append(new)
-
-            else:
-                # This set of carriages isn't transferred again, yield it as a complete block
-                yield block
+        return cls(legs, carriages)
 
     @staticmethod
-    def deduplicate(blocks: Iterable["Block"]) -> list["Block"]:
-        """Deduplicates a given set of blocks, so that no one Block is a subset of another,
-        different Block.
+    def _find_initial_trip_in_linear_block(connections: Sequence[Connection]) -> str | None:
+        candidates = {i.from_trip_id for i in connections}
+        for connection in connections:
+            candidates.discard(connection.to_trip_id)
 
-        Note that this function has quadratic complexity and is not suitable for large inputs.
-        """
-        unique = list[Block]()
+        if len(candidates) != 1:
+            return None
 
-        for block in blocks:
-            # Compare against every remembered block to see if the new block is unique
-            for i, candidate in enumerate(unique):
-                if block.issubset(candidate):
-                    # The block is subset of candidate - no need to remember it
-                    break
-                elif block.issuperset(candidate):
-                    # The block is superset of candidate - remember it instead of the candidate
-                    unique[i] = block
-                    break
-            else:
-                # The block was not a subset or superset of any other remembered block -
-                # remember it
-                unique.append(block)
+        return candidates.pop()
 
-        return unique
+
+class NonLinearBlock(ValueError):
+    """Raised by Block.resolve_linear if the block doesn't appear to be linear."""
+
+    def __init__(
+        self,
+        reason: str,
+        carriages: Iterable[str],
+        trip_ids: Iterable[str],
+        connections: Iterable[int],
+    ) -> None:
+        self.reason = reason
+        self.carriages = "/".join(sorted(carriages))
+        self.trip_ids = sorted(trip_ids)
+        self.connections = sorted(connections)
+
+        super().__init__(
+            f"non-linear block ({reason}): carriages={self.carriages} "
+            f"trip_ids={self.trip_ids} connections={self.connections}"
+        )
+
+    @classmethod
+    def from_connections(
+        cls,
+        reason: str,
+        carriages: Iterable[str],
+        connections: Iterable[Connection],
+    ) -> Self:
+        trip_ids = set[str]()
+        connection_ids = set[int]()
+        for conn in connections:
+            connection_ids.add(conn.id)
+            trip_ids.add(conn.from_trip_id)
+            trip_ids.add(conn.to_trip_id)
+        return cls(reason, carriages, trip_ids, connection_ids)
+
+    def log(self, l: logging.Logger) -> None:
+        l.error(self.args[0])
 
 
 class GenerateInSeatTransfers(Task):
@@ -344,10 +484,10 @@ class GenerateInSeatTransfers(Task):
         self,
         db: DBConnection,
         connections: Sequence[Connection],
-    ) -> list[Block]:
+    ) -> Iterable[Block]:
         trips = self.get_trips_for_connections(db, connections)
         valid_connections = filter(lambda t: t.is_valid(trips), connections)
-        return Block.find_all_deduplicated(valid_connections, trips)
+        yield from Block.find_all(valid_connections, trips)
 
     def get_trips_for_connections(
         self,
@@ -364,9 +504,7 @@ class GenerateInSeatTransfers(Task):
                 ),
             )
             for idx, stop_id in query:
-                # Use setdefault to use the smallest possible stop_sequence for any given stop_id,
-                # just in case a trip stops at stop_id multiple times
-                trip.stop_sequence_by_id.setdefault(stop_id, idx)
+                trip.insert_stop(idx, stop_id)
         return trips
 
     def insert_block_trips(self, db: DBConnection, b: Block) -> None:
@@ -444,3 +582,19 @@ class GenerateInSeatTransfers(Task):
                 (trip_id, stop_sequence),
             )
         return cast(str, q.one_must("invalid TripSlice")[0])
+
+
+def build_index(items: Iterable[_V], key: Callable[[_V], _K]) -> dict[_K, _V]:
+    """Builds a lookup table for items by the provided key function.
+
+    Equivalent to `{key(i): i for i in items}`, except that ValueError is raised
+    if the keys are not unique.
+    """
+
+    lookup = dict[_K, _V]()
+    for v in items:
+        k = key(v)
+        if k in lookup:
+            raise ValueError(f"duplicate key: {k} (from {lookup[k]} and {v})")
+        lookup[k] = v
+    return lookup
