@@ -71,6 +71,24 @@ class PKPIntercityGTFS(App):
                 FixTimeTravelTransfers(),
                 SplitTripLegsRetainingTransfers(),
                 AssignBlockIds(),
+                ExecuteSQL(
+                    statement=(
+                        "UPDATE stop_times SET pickup_type = 0 WHERE pickup_type = 1"
+                        " AND (trip_id, stop_id) IN ("
+                        "  SELECT to_trip_id, to_stop_id FROM transfers WHERE transfer_type = 1"
+                        ")"
+                    ),
+                    task_name="FixPickupTypeOnBusTransfers",
+                ),
+                ExecuteSQL(
+                    statement=(
+                        "UPDATE stop_times SET drop_off_type = 0 WHERE drop_off_type = 1"
+                        " AND (trip_id, stop_id) IN ("
+                        "  SELECT from_trip_id, from_stop_id FROM transfers WHERE transfer_type = 1"
+                        ")"
+                    ),
+                    task_name="FixDropOffTypeOnBusTransfers",
+                ),
                 ModifyRoutesFromCSV("routes.csv", must_curate_all=True, silent=True),
                 CreateFeedInfo(),
                 SaveGTFS(headers=GTFS_HEADERS, target=args.output, ensure_order=True),
