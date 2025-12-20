@@ -41,8 +41,8 @@ GTFS_HEADERS = {
         "track",
         "fare_dist_m",
         "vehicle_kind",
-        "pickup_type",
-        "drop_off_type",
+        # "pickup_type",
+        # "drop_off_type",
     ),
     "transfers.txt": (
         "from_stop_id",
