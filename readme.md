@@ -11,11 +11,13 @@ You need to get login credentials for the FTP server by writing an email to PKP 
 
 Stop data comes from my other project, [PLRailMap](https://github.com/MKuranowski/PLRailMap).
 
+The created GTFS also contains data for carriage switching in the middle of trips -
+those are handled by creating copies of the original trips and linking those copies by
+block_id and in-seat (type 4) transfers.
+
 
 Issues
 ------
-
-Currently, merging/joining trains are not correctly supported.
 
 International trains have data only within Polish borders,
 this is due to a limitation in PKP IC's internal systems.
@@ -29,7 +31,7 @@ PKPIntercityGTFS is written in Python with the [Impuls framework](https://github
 To set up the project, run:
 
 ```terminal
-$ python3 -m venv .venv
+$ python -m venv .venv
 $ . .venv/bin/activate
 $ pip install -Ur requirements.txt
 ```
@@ -38,7 +40,7 @@ Then, run:
 
 ```terminal
 $ export INTERCITY_FTP_CREDENTIALS=ftp_username,ftp_password
-$ python3 -m polregio_gtfs
+$ python -m pkpic_gtfs
 ```
 
 Substituting `ftp_username` and `ftp_password` for login credentials to the PKP IC's FTP server.
