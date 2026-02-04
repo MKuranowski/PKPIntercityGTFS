@@ -11,7 +11,9 @@ NORMALIZATION = {
     "IC+": "IC",
 }
 
-PRIORITY = {name: idx for idx, name in enumerate(["EIP", "EIC", "IC", "TLK", "EN", "EC", "MP"])}
+PRIORITY = {
+    name: idx for idx, name in enumerate(["EIP", "EIC", "IC", "TLK", "EN", "EC", "MP", "ICN"])
+}
 
 
 class SimplifyRoutes(Task):
