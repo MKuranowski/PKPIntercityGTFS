@@ -43,12 +43,9 @@ class PKPIntercityGTFS(App):
                 ),
                 LoadCSV(),
                 ExecuteSQL(
-                    statement="DELETE FROM stops WHERE stop_id = '201084'",
-                    task_name="RemoveBohuminVrbice",
-                ),
-                ExecuteSQL(
-                    statement="DELETE FROM stops WHERE stop_id = '179215'",
-                    task_name="RemoveHorka",
+                    # W-wa Grochów, Bohumin Vrbice, Horka
+                    statement="DELETE FROM stops WHERE stop_id IN ('38554', '179215', '201084')",
+                    task_name="RemoveTechnicalStops",
                 ),
                 ExecuteSQL(
                     statement=r"UPDATE trips SET short_name = re_sub('(?i)\bzka\b', 'ZKA', short_name)",
