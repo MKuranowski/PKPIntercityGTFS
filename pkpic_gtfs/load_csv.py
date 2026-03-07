@@ -155,6 +155,7 @@ def parse_train(rows: list[CSVRow]) -> tuple[Trip, list[StopTime]]:
                 "track": track,
                 "fare_dist_m": str(dist),
                 "vehicle_kind": vehicle_kind,
+                "stop_name": row.get("NazwaStacji", ""),
             },
         )
 
