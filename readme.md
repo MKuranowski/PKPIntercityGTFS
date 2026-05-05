@@ -1,3 +1,9 @@
+⚠️ Deprecation warning
+======================
+
+This script is obsolete and has been superseded by [PolishTrainsGTFS](https://github.com/MKuranowski/PolishTrainsGTFS).
+
+
 PKPIntercityGTFS
 ============
 
